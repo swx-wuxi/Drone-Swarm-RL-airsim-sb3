@@ -1,42 +1,60 @@
-import time
-import yaml
-
+import supersuit as ss
 from stable_baselines3 import PPO
-from stable_baselines3.common.monitor import Monitor
-from stable_baselines3.common.vec_env import DummyVecEnv, VecTransposeImage
-from stable_baselines3.common.evaluation import evaluate_policy
-from stable_baselines3.common.callbacks import EvalCallback
-from scripts.network import NatureCNN
-from stable_baselines3.common.env_checker import check_env
-from pettingzoo.test import parallel_api_test
+import time
 
-from scripts.airsim_env import AirSimDroneEnv, petting_zoo
+from scripts.airsim_env import AirSimDroneEnv   # ← 改成你环境文件的名字
 
-# Load inference configs
-with open('config.yml', 'r') as f:
-    config = yaml.safe_load(f)
+# ----------------------------------------------------
+# 1. Load trained model
+# ----------------------------------------------------
+MODEL_PATH = "saved_policy/best_model"   # ← 你训练生成的 .zip 文件名
+model = PPO.load(MODEL_PATH)
 
-# Determine input image shape
-image_shape = (84,84,1) if config["train_mode"]=="depth" else (84,84,3)
+# ----------------------------------------------------
+# 2. Create environment EXACTLY like training
+# ----------------------------------------------------
+def make_env():
+    env = AirSimDroneEnv(
+        ip_address="127.0.0.1",
+        image_shape=(84, 84, 3),
+        input_mode="single_rgb",
+        num_drones=1
+    )
 
-env = petting_zoo(        
-        ip_address="127.0.0.1", 
-        image_shape=image_shape,
-        input_mode=config["train_mode"],
-        num_drones=config["num_drones"]
-        )
+    # Wrap to vectorized env (must match training!)
+    env = ss.pettingzoo_env_to_vec_env_v1(env)
+    env = ss.concat_vec_envs_v1(env, 1, base_class="stable_baselines3")
+    return env
 
-model = PPO.load("saved_policy/best_model", env=env)
+env = make_env()
 
-obs, info = env.reset()
+# ----------------------------------------------------
+# 3. Reset environment
+# ----------------------------------------------------
+obs = env.reset()
+done = False
 
-# Evaluate the agents
-episode_reward = 0
-for _ in range(1000):
+print("\n===== Evaluation started =====")
+
+# ----------------------------------------------------
+# 4. Evaluation loop
+# ----------------------------------------------------
+step = 0
+while True:
+    step += 1
     action, _ = model.predict(obs, deterministic=True)
-    obs, reward, terminated, truncated, info = env.step(action)
-    episode_reward = reward
-    if terminated.all() or truncated.all(): # or info.get("is_success", False):
-        print("Reward:", episode_reward)#, "Success?", info.get("is_success", False))
-        episode_reward = 0
-        obs, info = env.reset()
+
+    obs, reward, done, info = env.step(action)
+
+    print(f"Step {step}: action={action}, reward={reward}")
+
+    # if env terminates
+    if done:
+        print("Episode finished.")
+        break
+
+    # Optional: slow down evaluation
+    time.sleep(0.1)
+
+print("===== Evaluation finished =====")
+env.close()

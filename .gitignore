@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.vscode/
+tb_logs/
+saved_policy/
+settings/airsim/

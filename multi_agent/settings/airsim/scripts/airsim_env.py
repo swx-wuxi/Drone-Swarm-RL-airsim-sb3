@@ -15,29 +15,18 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 def env(**kwargs):
     env = AirSimDroneEnv(**kwargs)
-    #  env = ss.black_death_v3(env)
-    #  env = ss.frame_stack_v2(env, 3)
+    env = ss.black_death_v3(env)
+    #env = ss.frame_stack_v2(env, 3)
     env = ss.pettingzoo_env_to_vec_env_v1(env)
     env = ss.concat_vec_envs_v1(env, 1, base_class="stable_baselines3")
-
-    import types, numpy as np, random
-    def _seed(self, seed=None):
-        if seed is not None:
-            np.random.seed(seed)
-            random.seed(seed)
-        return [seed]
-    env.seed = types.MethodType(_seed, env)
     return env
+
 
 petting_zoo = env
 
 
 class AirSimDroneEnv(ParallelEnv, EzPickle):
-    metadata = {
-        "render_modes": ["human", "rgb_array"],
-        "name": "airsim_drone_env_v0",
-        "is_parallelizable": True,  # 如果还没加，也要有
-    }
+    metadata = {'name': 'drones', 'render_modes': ['human']}
 
     def __init__(self,  
                  ip_address, 
@@ -56,7 +45,6 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
         self.image_shape = image_shape
         self.input_mode = input_mode
         self.num = num_drones
-        self.render_mode = None
 
         # Init
         self.drone = airsim.MultirotorClient(ip=ip_address)
@@ -139,16 +127,15 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
         # PettingZoo
         self.agents = [k for k in self.done.keys() if self.done[k]!=1]
 
-        # print("##################################")
-        # print("Current step:", self.current_step)
-        # print("##################################")
+        print("##################################")
+        print("########### Step debug ###########")
+        print("##################################")
         #print("Chosen actions for each drone:", action)
         #print("Obs len:", len(obs))
-        print(f"Step {self.current_step}:reward is {self.reward}")
-        # print("Active agents (not dead/not success):", self.agents)
-        # if self.done: 
-        #   print("=============Finish Task!!!!===========")
-        # print("Infos?", info)
+        print("Returned rewards", self.reward)
+        print("Active agents (not dead/not success):", self.agents)
+        print("Done?", self.done)
+        print("Infos?", info)
         #print("Truncated?", self.truncations)
 
         return obs, self.reward, self.done, self.truncations, info
@@ -213,8 +200,8 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
 
         # Set x start and target
         self.agent_start_pos = 0
-        # x_t, y_t, _ = self.drone.simGetObjectPose('target').position
-        self.target_pos = np.array([50,50])
+        x_t, y_t, _ = self.drone.simGetObjectPose('target').position
+        self.target_pos = np.array([x_t, y_t])
 
         # Set y,z start at a min distance
         y_pos, z_pos = self.generate_pos()
@@ -307,7 +294,7 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
                 # Vicinity reward
                 target_dist_curr = np.linalg.norm(np.array([x, y]) - self.target_pos)
                 if act[i][0] > 0:
-                    reward[i] += (self.target_dist_prev/(target_dist_curr+1e-6))*act[i][0]
+                    reward[i] += (self.target_dist_prev/target_dist_curr)*act[i][0]
                 else:
                     reward[i] -= 3 #3
                     

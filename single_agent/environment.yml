@@ -191,7 +191,7 @@ dependencies:
   - zstd=1.5.5=hd43e919_0
   - pip:
       - absl-py==1.4.0
-      - airsim==1.8.1
+      # - airsim==1.8.1
       - ale-py==0.7.4
       - astunparse==1.6.3
       - async-timeout==4.0.2
