@@ -3,4 +3,4 @@ train_mode: "single_rgb"
 test_mode: "single_rgb"
 
 # Number drones
-num_drones: 5
+num_drones: 3

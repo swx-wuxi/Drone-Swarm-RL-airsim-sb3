@@ -15,7 +15,8 @@ os.environ['KMP_DUPLICATE_LIB_OK']='True'
 
 def env(**kwargs):
     env = AirSimDroneEnv(**kwargs)
-    #  env = ss.black_death_v3(env)
+    # #########Don't use black death for stable baselines(LOTS OF BUGS HERE) #########
+    # env = ss.black_death_v3(env)    
     #  env = ss.frame_stack_v2(env, 3)
     env = ss.pettingzoo_env_to_vec_env_v1(env)
     env = ss.concat_vec_envs_v1(env, 1, base_class="stable_baselines3")
@@ -85,8 +86,8 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
                                 dtype=np.uint8
                             ),
                             "pos":gymnasium.spaces.Box(
-                                low=-200.0, 
-                                high=200.0, 
+                                low=-5000.0, 
+                                high=5000.0, 
                                 shape=(3,), 
                                 dtype=np.float32
                             )
@@ -101,8 +102,8 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
         self.action_spaces = gymnasium.spaces.Dict(
                 {
                     id:gymnasium.spaces.Box(
-                        low=np.array([0.0, -3.0, -3.0]),
-                        high=np.array([3.0, 3.0, 3.0]),
+                        low=np.array([-3.0, -3.0, -0.5]), 
+                        high=np.array([3.0, 3.0, 0.5]),
                         shape=(3,), 
                         dtype=np.float32
                     )
@@ -132,12 +133,23 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
         self.reward = {agent:(self.reward[agent] if self.done[agent]!=1 else 0) for agent in self.possible_agents}
 
         for i in self.agents:
-            self.do_action(action[i], i)
+            if self.done[i] != 1:
+                self.do_action(action[i], i)
+            else:
+                if(self.obj[i]==-1):
+                    # Crashed
+                    print("Drone", i, "has crashed, ascending...")
+                    self.drone.moveByVelocityAsync(0, 0, 1, 1, vehicle_name=i)
+                else:
+                    # Arrived
+                    print("Drone", i, "has arrived at the target, hovering...")
+                    self.drone.moveByVelocityAsync(0, 0, 0, 1, vehicle_name=i)
+
         obs, info = self.get_obs(self.done)
         self.reward, self.done = self.compute_reward(self.reward, self.done, action)
 
         # PettingZoo
-        self.agents = [k for k in self.done.keys() if self.done[k]!=1]
+        # self.agents = [k for k in self.done.keys() if self.done[k]!=1]
 
         # print("##################################")
         # print("Current step:", self.current_step)
@@ -178,7 +190,7 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
             # Generate
             y = np.random.uniform(-18, 18, self.num) 
             #y -= np.array([i for i in range(len(y))]) * 2 # AirSim BUG: spawn offset must be considered!
-            z = np.random.uniform(-8, -1, self.num)
+            # z = np.random.uniform(-10, -5, self.num)
             y_combos = combinations(y, 2)
             y_diff = [a-b for a,b in y_combos]
 
@@ -186,7 +198,7 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
             if all(ele < -5 or ele > 5 for ele in y_diff):
                 res = False
 
-        return y,z
+        return y
 
     # Multi agent start setup
     def setup_flight(self):
@@ -208,27 +220,65 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
             self.drone.enableApiControl(True, vehicle_name=i)
             self.drone.armDisarm(True, vehicle_name=i)
 
-            # Prevent drone from falling after reset
-            self.drone.moveToZAsync(-1, 1, vehicle_name=i)
+            # # Prevent drone from falling after reset
+            # self.drone.moveToZAsync(-1, 1, vehicle_name=i)
 
         # Set x start and target
         self.agent_start_pos = 0
+        
         # x_t, y_t, _ = self.drone.simGetObjectPose('target').position
-        self.target_pos = np.array([50,50])
+        # self.target_pos = np.array([x_t, y_t])
 
+        # 为每架无人机读取独立 target 的 (x, y)
+        self.target_pos = {}
+
+        for name in self.possible_agents:
+            pose = self.drone.simGetObjectPose(f"target{name[-1]}")  # target0,target1,target2...
+            x_t, y_t, _ = pose.position
+            self.target_pos[name] = np.array([x_t, y_t], dtype=np.float32)
+
+        # print("======= Debug: Multi target positions ========")
+        # print(self.target_pos)
+
+        # print("======余梓溪好可爱！！=====")
+        # print("=======Debug: Target position:========", self.target_pos)
         # Set y,z start at a min distance
-        y_pos, z_pos = self.generate_pos()
+        
+        # print("Starting y positions:", y_pos)
 
-        print("Starting y positions:", y_pos)
+        # for i in range(0,self.num):
+        #     pose = airsim.Pose(airsim.Vector3r(self.agent_start_pos,y_pos[i],z_pos[i]))
+        #     self.drone.simSetVehiclePose(pose=pose, ignore_collision=True, vehicle_name=self.possible_agents[i])
+        FIXED_Z_UE = -300
+        FIXED_Z_AIRSIM = -FIXED_Z_UE  # AirSim Z 坐标取反
 
-        for i in range(0,self.num):
-            pose = airsim.Pose(airsim.Vector3r(self.agent_start_pos,y_pos[i],z_pos[i]))
-            self.drone.simSetVehiclePose(pose=pose, ignore_collision=True, vehicle_name=self.possible_agents[i])
+        y_pos = self.generate_pos()  # 不再用 random z
 
+        for i in range(0, self.num):
+            pose = airsim.Pose(
+                airsim.Vector3r(
+                    self.agent_start_pos,
+                    y_pos[i],
+                    FIXED_Z_AIRSIM
+                )
+            )
+            self.drone.simSetVehiclePose(
+                pose=pose,
+                ignore_collision=True,
+                vehicle_name=self.possible_agents[i]
+            )
+     
         # Get target distance with mean distance for reward calculation
-        self.target_dist_prev = np.linalg.norm(
-            np.array([np.mean(y_pos), np.mean(z_pos)]) - self.target_pos)
+        # self.target_dist_prev = np.linalg.norm(
+        #     np.array([np.mean(y_pos), np.mean(z_pos)]) - self.target_pos)
+        self.target_dist_prev = {}
+        for name in self.possible_agents:
+            # 获取起点位置
+            x, y, _ = self.drone.simGetVehiclePose(name).position
+            start_xy = np.array([x, y])
+            self.target_dist_prev[name] = np.linalg.norm(start_xy  - self.target_pos[name][:2])
 
+                
         if self.input_mode == "multi_rgb":
             self.obs_stack = np.zeros(self.image_shape)
 
@@ -238,16 +288,16 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
 
     def do_action(self, action, name):
         # Execute action
-        self.drone.moveByVelocityBodyFrameAsync(
-            float(action[0]), float(action[1]), float(action[2]), duration=1, vehicle_name=name).join()
-
-        # Prevent swaying
-        self.drone.moveByVelocityAsync(vx=0, vy=0, vz=0, duration=1, vehicle_name=name)
+        self.drone.moveByVelocityAsync(
+            float(action[0]), float(action[1]), 0 , duration=1, vehicle_name=name).join()
+        
+        # # Prevent swaying
+        # self.drone.moveByVelocityAsync(vx=0, vy=0, vz=-5.0, duration=1, vehicle_name=name)
 
     # Multi agent observations as list of single obs
     def get_obs(self,done):
         obs = {}
-        for i in self.agents:
+        for i in self.possible_agents:
             self.info[i] = {"collision": self.is_collision(i)}
             x,y,z = self.drone.simGetVehiclePose(i).position
             #y += int(i[-1])*2 # AirSim BUG: spawn offset must be considered! 
@@ -305,12 +355,29 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
                 coord[i] = (x,y,z)
 
                 # Vicinity reward
-                target_dist_curr = np.linalg.norm(np.array([x, y]) - self.target_pos)
-                if act[i][0] > 0:
-                    reward[i] += (self.target_dist_prev/(target_dist_curr+1e-6))*act[i][0]
+                target = self.target_pos[i]  # 使用自己的 target
+                target_dist_curr = np.linalg.norm(np.array([x, y]) - target)
+                print("Current distance of", i, "to target:", target_dist_curr)
+                
+                safe_ratio = self.target_dist_prev[i] / max(target_dist_curr, 1.0)
+                self.target_dist_prev[i] = target_dist_curr # Update previous distance
+                
+                ##############################################
+                # Debug
+                ##############################################
+
+                # Clip action to valid range just in case
+                safe_action = np.clip(act[i][0], -2.0, 2.0)
+
+                if safe_action > 0:
+                    reward[i] += safe_ratio * safe_action
                 else:
-                    reward[i] -= 3 #3
-                    
+                    reward[i] -= 5
+
+                # 防止 reward 是 NaN 或 inf
+                if np.isnan(reward[i]) or np.isinf(reward[i]):
+                    reward[i] = -10
+   
                 # Collision penalty
                 if self.is_collision(i):
                     reward[i] = -100
@@ -319,23 +386,28 @@ class AirSimDroneEnv(ParallelEnv, EzPickle):
                     self.obj[i] = -1
 
                 # Check if agent almost arrived
-                if target_dist_curr < 12: #17
+                if target_dist_curr < 15: #17
                     reward[i] = 100
                     done[i] = 1
                     self.truncations[i] = 1
                     self.obj[i] = 1
 
         # Negative reward if drones get too near; might be slow
-        if len(self.agents)>1:
-            for i in list(combinations(self.agents, 2)):
-                if self.msd(coord[i[0]],coord[i[1]])<2:
-                    reward[i[0]]-=10
-                    reward[i[1]]-=10
+        # if len(self.agents)>1:
+        #     for i in list(combinations(self.agents, 2)):
+        #         if self.msd(coord[i[0]],coord[i[1]])<2:
+        #             reward[i[0]]-=10
+        #             reward[i[1]]-=10
 
         # Give another reward if all drones reach objective
-        if all([k==1 for k in self.obj.values()]):
+        if any([k==1 for k in self.obj.values()]):
             reward = {k:v+100 for k,v in reward.items()}
+            print("################### !!! Some DRONES ARRIVED!!! ###################")
+
+        elif all([k==1 for k in self.obj.values()]):
+            reward = {k:v+500 for k,v in reward.items()}
             print("################### !!! ALL DRONES ARRIVED !!! ###################")
+
         elif all([k==-1 for k in self.obj.values()]):
             reward = {k:v-100 for k,v in reward.items()}
             print("################### ALL DRONES CRASHED :( ###################")
